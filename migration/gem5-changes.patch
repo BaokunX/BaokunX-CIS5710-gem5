@@ -1,0 +1,72 @@
+diff --git a/src/cpu/pred/2bit_local.cc b/src/cpu/pred/2bit_local.cc
+index 34b495bc21..f697002a64 100644
+--- a/src/cpu/pred/2bit_local.cc
++++ b/src/cpu/pred/2bit_local.cc
+@@ -57,6 +57,8 @@ LocalBP::LocalBP(const LocalBPParams &params)
+       localCtrBits(params.localCtrBits),
+       localPredictorSets(localPredictorSize / localCtrBits),
+       localCtrs(localPredictorSets, SatCounter8(localCtrBits)),
++      tagMatching(params.tagMatching),
++      localTags(localPredictorSets, 0),
+       indexMask(localPredictorSets - 1)
+ {
+     if (!isPowerOf2(localPredictorSize)) {
+@@ -98,6 +100,10 @@ LocalBP::lookup(ThreadID tid, Addr branch_addr, void * &bp_history)
+ {
+     bool taken;
+     unsigned local_predictor_idx = getLocalIndex(branch_addr);
++    if (tagMatching &&
++    localTags[local_predictor_idx] != branch_addr) {
++    return false;
++}
+ 
+     DPRINTF(Fetch, "Looking up index %#x\n",
+             local_predictor_idx);
+@@ -127,6 +133,18 @@ LocalBP::update(ThreadID tid, Addr branch_addr, bool taken, void *&bp_history,
+ 
+     // Update the local predictor.
+     local_predictor_idx = getLocalIndex(branch_addr);
++    if (tagMatching &&
++    localTags[local_predictor_idx] != branch_addr) {
++
++    const unsigned threshold = 1U << (localCtrBits - 1);
++    const unsigned initialValue = taken ? threshold : threshold - 1;
++
++    localCtrs[local_predictor_idx] =
++        SatCounter8(localCtrBits, initialValue);
++
++    localTags[local_predictor_idx] = branch_addr;
++    return;
++}
+ 
+     DPRINTF(Fetch, "Looking up index %#x\n", local_predictor_idx);
+ 
+diff --git a/src/cpu/pred/2bit_local.hh b/src/cpu/pred/2bit_local.hh
+index bb539d37a9..9a7f29e81a 100644
+--- a/src/cpu/pred/2bit_local.hh
++++ b/src/cpu/pred/2bit_local.hh
+@@ -111,6 +111,12 @@ class LocalBP : public ConditionalPredictor
+     /** Array of counters that make up the local predictor. */
+     std::vector<SatCounter8> localCtrs;
+ 
++    /** Whether tag matching is enabled. */
++    const bool tagMatching;
++
++    /** Branch PC associated with each counter. */
++    std::vector<Addr> localTags;
++
+     /** Mask to get index bits. */
+     const unsigned indexMask;
+ };
+diff --git a/src/cpu/pred/BranchPredictor.py b/src/cpu/pred/BranchPredictor.py
+index 956153a972..a85f9876cf 100644
+--- a/src/cpu/pred/BranchPredictor.py
++++ b/src/cpu/pred/BranchPredictor.py
+@@ -262,6 +262,7 @@ class LocalBP(ConditionalPredictor):
+ 
+     localPredictorSize = Param.Unsigned(2048, "Size of local predictor")
+     localCtrBits = Param.Unsigned(2, "Bits per counter")
++    tagMatching = Param.Bool(False, "Enable tag matching for LocalBP")
+ 
+ 
+ class TournamentBP(ConditionalPredictor):
